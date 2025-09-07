@@ -122,16 +122,9 @@ spec:
     runAsGroup: 1000
     fsGroup: 1000
 
-  # mutable after creation - one way, only if initially there is no (user)/pass
-  acl:
-    enabled: true
-    users:
-    - name: "valkey-user"             # if empty, legacy mode used
-      password: "user-secret-pass"
+  # if nothing is provided, no acl, no pass, no nothing
+  acl: valkey-poc-acl
 
-  # imutable after creation
-  clusterPassword: "cluster-secret-pass"
-  
   # mutable after creation
   sidecarImage:
     name: ghcr.io/valkeyoperatorsidecar
@@ -147,11 +140,57 @@ spec:
       imagePullSecrets: []
 ```
 
+```yaml
+apiVersion: valkey.io/v1alpha1
+kind: ValkeyClusterAcl
+metadata:
+  name: valkey-poc-acl
+spec:
+  # the generated secret that will be mounted in valkey nodes
+  secretName: valkey-poc-acl
+  admin:
+    name: valkey-admin              # if empty, legacy mode used (with "default" user)
+    # password will be from secretName, with key admin.name. if empty, name is "default"
+  # imutable after creation (?)
+  clusterPassword: "cluster-secret-pass"
+    valueFrom:
+      secretKeyRef:
+        key: cluster-password
+  users:
+  - name: "valkey-user"
+    acl: "+GET +SET ~app:*"         # admin is +@all ~*
+    # password will be from secretName, with key user[i].name
+  secrets:
+    secretName: valkey-poc-acl
+status:
+  phase: Applied                    # MissingSecret, IncompleteSecret, Applying, Applied, Error
+  nodes:
+  - name: node1
+    status: Ok
+  - name: node2
+    status: Error
+    message: "ACL LOAD failed: invalid syntax"
+```
+
+```yaml
+# corresponding secret for acl
+apiVersion: v1
+kind: Secret
+metadata:
+  name: valkey-poc-acl-defs
+type: Opaque
+stringData:
+  valkey-admin-acl: "+@all ~*"
+  valkey-admin-pass: "myPass"
+  valkey-user-acl: "+GET +SET ~app:*"
+  valkey-user-pass: "otherPass"
+```
+
 ### Valkey Operator Defaults
 
 ```yaml
 apiVersion: valkey.io/v1alpha1
-kind: ValkeyOperatioDefaults
+kind: ValkeyClusterDefaults
 metadata:
   name: valkey-operator-defaults
 spec:
@@ -167,7 +206,10 @@ spec:
 ### Cluster Status
 
 ```yaml
-# there are a lot of things to be clarified here. what to have, details etc
+# there are a lot of things to be clarified here
+# what to have, details etc
+# maybe (more than 50%) will be merged with ValkeyCluster
+# if merge, watch out for size, as etcd might reject it
 apiVersion: valkey.io/v1alpha1
 kind: ValkeyClusterStatus
 metadata:
@@ -310,19 +352,11 @@ TBD
 
 ## Features (unorganized)
 
-### Operator SDK Capabilities
-The Operator SDK (Go-based) scaffolds a controller that can:
-- Watch and reconcile custom and native Kubernetes resources.
-- Create, update, and delete resources declaratively.
-- React to events (add/update/delete) and status changes.
-- Manage finalizers to delay deletion.
-- Patch resources dynamically.
-- Integrate webhooks to validate or mutate resources.
-- Handle leader election, metrics, and health checks.
-
 ### CR Changes
+TBD
 
 ### **Operator** recovery and resources reconciliation from restart/scale 0
+TBD
 
 ### Resources identification
 
@@ -455,6 +489,111 @@ spec:
 
 **Intercept deletion:** When a Pod is marked for deletion, Kubernetes sets `metadata.deletionTimestamp`.
 
+### ACL creation and rotation
+
+#### Creation
+Store pregenerated ACL file as a Kubernetes Secret
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: valkey-poc-acl
+type: Opaque
+stringData:
+  users.acl: |
+    user admin on >StrongPassword +@all ~*
+```
+
+Mount it as a read-only volume:
+```yaml
+# container spec
+volumeMounts:
+- name: acl-volume
+  mountPath: /etc/valkey/acl
+  readOnly: true
+volumes:
+- name: acl-volume
+  secret:
+    secretName: valkey-acl
+# ...
+# pod spec
+volumes:
+- name: users-acl-volume
+  secret:
+    secretName: valkey-poc-acl
+    items:
+    - key: users.acl
+      path: users.acl
+```
+Reference it in `valkey.conf`:
+```ini
+aclfile /etc/valkey/acl/users.acl
+```
+
+#### Secret rotation
+When a change in `ValkeyClusterAcl` or in secret is detected and reconciled, the following happens:
+1. **Operator** creates the new secret with the rendered users.acl
+2. **Operator** opens grpc with all sidecars
+3. **Operator** confirms with all sidecars that ACL is ok (do we need to test k8s here?)
+4. **Operator** asks for acl reapply
+5. **Sidecar** checks if its password changed
+6. **Sidecar** connects to Valkey and executes
+```resp
+ACL LOAD
+```
+7. **Sidecar** (if password changed, reconnects and) checks ACL
+```resp
+ACL LIST
+```
+8. **Sidecar** reports back status
+9. **Operator** change status in `ValkeyClusterAcl`
+
+### Deferred executions
+
+There are cases when one object depends on another. Use Indexing for Reverse Lookup: with [controller-runtime](https://pkg.go.dev/sigs.k8s.io/controller-runtime), index the CRs by the Secrets they reference:
+
+```go
+mgr.GetFieldIndexer().IndexField(&ValkeyClusterAcl{}, "spec.secrets.secretName", func(obj client.Object) []string {
+    return []string{obj.(*ValkeyClusterAcl).Spec.Secrets.SecretName}
+})
+```
+Then, when a Secret changes, list all CRs that reference it:
+
+```go
+var aclList ValkeyClusterAclList
+r.List(ctx, &aclList, client.MatchingFields{"spec.secrets.secretName": secret.Name})
+```
+
+The reconcile loop should:
+- check if the Secret exists and is complete
+- if not, set `status.phase`: `WaitingForSecret` and requeue
+- if yes, proceed with work and update `status.phase`: `Applied`
+
+Practicly, we have the following rules
+1. When a CR changes, reconcile it
+2. When a Secret changes, reconcile all CRs that reference it
+3. Use Status to Track Progress
+```yaml
+status:
+  phase: WaitingForSecret
+  lastChecked: 2025-09-07T19:17:00Z
+  missingKeys:
+    - valkey-user-pass
+```
+
+Actual Known Deps:
+| Who | DependsOn | Why/What |
+|-----|-----------|----------|
+| ValkeyCluster | ValkeyCertificateBundle | Intermediate CA for mTLS (and TLS) |
+| ValkeyCluster | ValkeyCertificateBinding | Certs for mTLS (and TLS) |
+| ValkeyCluster | ValkeyClusterAcl | Certs for mTLS (and TLS) |
+| ValkeyCertificateBundle | ValkeyCertificateCA | Operator CA |
+| ValkeyCertificateBundle | Secret | the secret that holds the intermediate certs |
+| ValkeyCertificateBinding | ValkeyCertificateBundle | the issuer for certs |
+| ValkeyCertificateBinding | Secrets | the secrets that hold the certs for mTLS (and TLS) |
+| ValkeyClusterAcl | Secret | the secret that holds the ACL definitions |
+
 ### Others
 
 **Status in CRs** - to reflect sidecar executions/Valkey cluster states  
@@ -463,7 +602,100 @@ spec:
 **Valkey /data** - accesible also from sidecar  
 **Valkey /tmp** - common between containers
 
-## k8s vars
+## Vars
+
+### Operator SDK Capabilities
+The Operator SDK (Go-based) scaffolds a controller that can:
+- Watch and reconcile custom and native Kubernetes resources.
+- Create, update, and delete resources declaratively.
+- React to events (add/update/delete) and status changes.
+- Manage finalizers to delay deletion.
+- Patch resources dynamically.
+- Integrate webhooks to validate or mutate resources.
+- Handle leader election, metrics, and health checks.
+
+### Core Principles for Operator SDK Development
+1. Declarative First
+- Treat the Custom Resource (CR) as the source of truth.
+- Reconciliation logic should always aim to bring the system to the desired state described in the CR.
+- Avoid imperative hacks—let Kubernetes do the heavy lifting.
+2. Idempotency
+- Every reconciliation loop should be safe to repeat.
+- No side effects from duplicate executions.
+- This ensures stability, especially during retries or restarts.
+3. Event-Driven, Not Time-Driven
+- Watch relevant resources (CRs, Secrets, ConfigMaps, etc.)
+- Avoid polling or time-based triggers unless absolutely necessary.
+- Use indexing and dependency tracking to respond intelligently to changes.
+4. Status Is a First-Class Citizen
+- Use the status field to reflect runtime state, errors, and progress.
+- This improves observability, debugging, and auditability.
+- Think of status as your operator’s dashboard.
+5. Graceful Error Handling
+- Don’t crash or panic—report errors in status, log clearly, and retry safely.
+- Use exponential backoff or rate limiting if needed.
+6. Validation and Admission Control
+- Validate CRs before acting on them.
+- Use OpenAPI schemas, webhooks, or preflight checks to catch misconfigurations early.
+7. Security by Design
+- Minimize RBAC permissions—follow least privilege.
+- Avoid mounting Secrets unless necessary.
+- Sanitize inputs and avoid leaking sensitive data in logs or status.
+8. Modular and Extensible
+- Keep your reconciliation logic clean and composable.
+- Use helper functions, services, or sub-controllers for complex workflows.
+- Make it easy to extend without rewriting everything.
+9. Resilience Across Restarts
+- Avoid in-memory state that doesn’t survive Pod restarts.
+- Use Kubernetes-native constructs (labels, annotations, status) to track progress.
+10. GitOps Compatibility
+- Design your CRs and workflows to be declarative and version-controlled.
+- Avoid side effects that aren’t reflected in the CR spec.
+- Make your operator predictable in CI/CD pipelines.
+11. Observability & Metrics
+- Emit Prometheus metrics for reconciliation success/failure, duration, and resource health.
+- Use structured logging with correlation IDs or resource names.
+- Integrate with tracing if your operator spans multiple systems.
+
+### Valkey ACL
+Valkey ACL is built to be backward-compatible. That means, by default, Valkey ships with a built-in user called `default`, which has full access to all commands and keys unless explicitly restricted. It is the infered user for legacy mode, where no user is provided.
+```sh
+# legacy mode, "default" is infered
+AUTH myPass
+# ACL mode
+AUTH myUser myPass
+```
+
+Bootstrap strategy for ACL implementation:
+1. Lock Down the Default User Immediately. In `valkey.conf`, do the following:
+```ini
+# Set a strong password for the default user
+requirepass "myPass"
+
+# Disable dangerous commands if needed (TBD)
+rename-command FLUSHALL ""
+rename-command CONFIG ""
+```
+2. Use the `default` user to create a named superuser
+```sh
+AUTH myPass
+# create your named superuser:
+ACL SETUSER valkey-admin on >myValkeyAdminPass +@all ~*
+# disable or Restrict the Default User
+ACL SETUSER default off
+# or restrict it severely
+ACL SETUSER default on >someOtherPassword -@all ~none
+```
+3. Persist ACLs Securely
+Valkey stores ACLs in memory. To persist them, use the aclfile directive in `valkey.conf`:
+```ini
+aclfile /etc/valkey-acl/users.acl
+```
+Export your ACL rules
+```sh
+# ensures your ACLs survive restarts and are version-controlled if needed.
+ACL SAVE
+```
 
 ### How a pod can be deleted
 
