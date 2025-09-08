@@ -120,9 +120,9 @@ Sample config
 ```ini
 tls-port 6379
 port 0
-tls-cert-file /etc/valkey/tls/server.crt
-tls-key-file /etc/valkey/tls/server.key
-tls-ca-cert-file /etc/valkey/tls/ca_bundle.pem
+tls-cert-file /etc/valkey-cluster/tls/server.crt
+tls-key-file /etc/valkey-cluster/tls/server.key
+tls-ca-cert-file /etc/valkey-cluster/tls/ca_bundle.pem
 tls-auth-clients yes
 tls-cluster yes
 tls-replication yes
@@ -132,6 +132,77 @@ The `valkey-cli` must be run with full trust
 ```sh
 valkey-cli --tls --cert /etc/client/client.crt --key /etc/client/client.key --cacert /etc/client/ca_bundle.pem
 ```
+
+## Ways of blocking/delaying pod delete
+
+**Finalizers** - on pod delete, on CR delete (cleanup Valkey resources). On pods, they must be injected (PATCH) after creation
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: my-pod
+  finalizers:
+  - valkey.io/finalizer
+```
+
+**Statefulset Update Strategy - on delete:** this will not update any pods if something changes. it will create a pod with new spec only on delete
+```yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: valkey
+spec:
+  serviceName: "valkey"
+  replicas: 6
+  selector:
+    matchLabels:
+      app: valkey
+  updateStrategy:
+    type: OnDelete
+  template:
+    metadata:
+      labels:
+        app: valkey
+    spec:
+      containers:
+      - name: nginx
+        image: valkey
+```
+
+**Pod Lifecycle** - `preStop` is called and waited before SIGTERM is sent
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: lifecycle-demo
+spec:
+  containers:
+  - name: lifecycle-demo-container
+    image: nginx
+    lifecycle:
+      postStart:
+        exec:
+          command: ["/bin/sh", "-c", "echo Hello from the postStart handler > /usr/share/message"]
+      preStop:
+        exec:
+          command: ["/bin/sh","-c","nginx -s quit; while killall -0 nginx; do sleep 1; done"]
+```
+
+**Pod Disruption Budget** - used with `minAvailable: 100%`. Only `--force --grace-period=0` will work
+```yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: block-all-disruptions
+spec:
+  minAvailable: 100%
+  selector:
+    matchLabels:
+      app: my-stateful-app
+```
+
+**Intercept deletion:** When a Pod is marked for deletion, Kubernetes sets `metadata.deletionTimestamp`.
+
 
 ## How a pod can be deleted
 
