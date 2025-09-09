@@ -2,6 +2,15 @@
 
 ## Cluster Definition
 
+There will be several main Valkey Deployment Falvours., ValkeyStandalone, , ValkeyCluster
+
+| CR                 | Description                            |
+|--------------------|----------------------------------------|
+| ValkeyStandalone   | Single Valkey instance                 |
+| ValkeyCluster      | Classic Valkey Cluster                 |
+| ValkeySentinel     | Sentinel Valkey Cluster                |
+| ValkeyMultiCluster | Multi Datacenter/Region Valkey Cluster |
+
 ```yaml
 apiVersion: valkey.io/v1alpha1
 kind: ValkeyCluster
@@ -14,8 +23,6 @@ spec:
     tag: 8.1
     imagePullSecrets: []
   
-  # imutable after creation
-  clusterType: cluster   # Options: sentinel, cluster
   # mutable after creation
   masterCount: 3
   replicasPerMaster: 1
@@ -135,6 +142,9 @@ spec:
       configMapKeyRef:
         name: my-dh-params-config
         key: myDhParams
+  
+  # should it be emphased that it is UTC (as it should be)?
+  tlsRefreshRestartWindow: "0 4 * * 6,0" (every sat, sun at 4:00 AM)
 ```
 
 ```yaml
@@ -176,7 +186,7 @@ metadata:
   name: valkey-poc-acl-defs
 type: Opaque
 stringData:
-  valkey-admin-acl: "+@all ~*"
+  # valkey-admin-acl: "+@all ~*"   # harcoded, they will be minimal
   valkey-admin-pass: "myPass"
   valkey-user-acl: "+GET +SET ~app:*"
   valkey-user-pass: "otherPass"

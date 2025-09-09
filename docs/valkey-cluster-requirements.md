@@ -42,8 +42,6 @@ spec:
       app: valkey-poc
 ```
 
-
-
 ## CR Changes
 TBD
 
@@ -163,11 +161,15 @@ TBD - mainly it is Pod deletion blocking for all, one by one
 TBD - to make it more clear, also to explain what to implement and how (from ways of blocking). sigterm trap for sidecar is missing (do we need this if valkey-preStop.sh exists?). and operator promoting primaries. and DNS issue with headless svc. and status in CRs is missing
 
 In order to block/delay pod deletion, the following will be implemented:
-- `finalizers: - valkey.io/finalizer` - do we really need this? it appeared as a mean of blocking rolling restarts/updates
-- `updateStrategy: type: OnDelete` - in statefulset - it will make manual pod delete mandatory in order to change anything
-- `lifecycle: preStop: exec: ` - upon pod delete, the `valkey-preStop.sh` will be executed. it will create a file, `/tmp/pod-deleted-signal.txt` and wait for its deletion. this file is watched for by **sidecar**
-  - if there were no messages from **operator**, the **sidecar** will signal back to operator that an unexpected delete is taking place. if primary node, the **operator** will apply Phase 2 from _Rolling restarts_, and will signal **sidecar** to continue with pod delete, **sidecar** will delete the file `/tmp/pod-deleted-signal.txt` and exit (?)
-  - if it is a planned delete, the sidecar will just delete the `/tmp/pod-deleted-signal.txt` file
+| What | Where | Comments |
+|------|-------|----------|
+| `finalizers: - valkey.io/finalizer` | Pod | _TBD_ do we really need this? it appeared as a mean of blocking rolling restarts/updates |
+| `updateStrategy: type: OnDelete` | Statefulset | it will make manual pod delete mandatory in order to change anything |
+| `lifecycle: preStop: exec: ` | Containers | on all of them. Upon pod delete, the `valkey-preStop.sh` will be executed |
+
+The `valkey-preStop.sh` file is watched for by **sidecar**
+- if there were no messages from **operator**, the **sidecar** will signal back to operator that an unexpected delete is taking place. If primary node, the **operator** will apply Phase 2 from _Rolling restarts_, and will signal **sidecar** to continue with pod delete, **sidecar** will delete the file `/tmp/pod-deleted-signal.txt`
+- if it is a planned delete, the sidecar will just delete the `/tmp/pod-deleted-signal.txt` file
 
 ### valkey-preStop.sh script
 ```sh
@@ -175,16 +177,15 @@ In order to block/delay pod deletion, the following will be implemented:
 
 # Create the signal file
 touch /tmp/pod-deleted-signal.txt
-echo "Waiting for /tmp/my-signal.txt to be deleted..."
+echo "Waiting for /tmp/pod-deleted-signal.txt to be deleted..."
 
 # Loop until the file is gone
-while [ -f /tmp/my-signal.txt ]; do
+while [ -f /tmp/pod-deleted-signal.txt ]; do
   sleep 1
 done
 
 echo "Signal file deleted. Exiting."
 ```
-
 
 ## ACL creation and rotation
 
