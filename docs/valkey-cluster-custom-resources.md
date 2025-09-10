@@ -97,6 +97,21 @@ spec:
     runAsGroup: 1000
     fsGroup: 1000
   
+  # imutable after creation
+  pvc:
+    storageSize: 30Gi
+    storageClassName: my-storage-class
+  
+  backup:
+    database:
+      enabled: true
+      save: "60 100"
+    aof:
+      enabled: true
+      appendfsync: everysec              # always, everysec, or no
+      autoAofRewritePercentage: 100
+      autoAofRewriteMinSize: 64mb
+  
   # mutable after creation
   sidecarImage:
     name: ghcr.io/valkeyoperatorsidecar
@@ -325,7 +340,7 @@ spec:
   active:
   - purpose: mtls
     bundleRef: valkey-poc-cert-bundle
-    secretName: valkey-mtls-secret
+    secretName: valkey-poc-mtls-secret
     thumbprint: "a1b2c3d4e5f67890abcd1234567890efabcd1234"
     issuedAt: "2025-09-01T00:00:00Z"
     expiresAt: "2026-09-01T00:00:00Z"
