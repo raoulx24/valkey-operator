@@ -42,7 +42,7 @@ spec:
       app: valkey-poc
 ```
 
-## CR Changes
+## CR Changes Reconciliation
 TBD
 
 ## **Operator** recovery and resources reconciliation from restart/scale 0

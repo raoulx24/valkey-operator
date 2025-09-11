@@ -4,6 +4,9 @@ metadata:
   name: valkey-poc
 data:
   valkey.conf: |
+    masteruser primary-replication-user
+    masterauth primary-replication-password
+
     cluster-enabled yes
     cluster-require-full-coverage no
     cluster-node-timeout 10000
@@ -83,6 +86,14 @@ spec:
   type: ClusterIP
 
 ---
+# TBD - acl created by init container in a shared dir
+# TBD - tls created by init container in a shared dir
+# TBD - valkey.conf created by init container in a shared dir (add also cluster pass there)
+# TBD - add support for secrets-store.csi
+# TBD - add valkey-preStop.sh
+# change init container to valkey-sidecar image
+# add option in CR if sysctl -w - net.core.somaxconn=10000 is needed. NB chown above files to "1000"
+
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:

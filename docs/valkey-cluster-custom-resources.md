@@ -170,18 +170,24 @@ metadata:
 spec:
   # the generated secret that will be mounted in valkey nodes
   secretName: valkey-poc-acl
-  admin:
+  secretType: Secret                # Secret, SecretsStore
+  admin-user:
     name: valkey-admin              # if empty, legacy mode used (with "default" user)
-    # password will be from aclDefinitionsSecretRef, with key admin.name. if empty, name is "default"
+    password:
+      key: valkey-admin-pass
+    # acl: "+@all ~*"               # harcoded, they will be minimal
   # imutable after creation (?)
+  replication-user:
+    name: primary-replication-user
+    password:
+      key: primary-replication-pass
+    # acl: "+replication"           # harcoded, they will be minimal
   clusterPassword: "cluster-secret-pass"
-    valueFrom:
-      secretKeyRef:
-        key: cluster-password
+    key: cluster-password
   users:
   - name: "valkey-user"
-    acl: "+GET +SET ~app:*"         # admin is +@all ~*
-    # password will be from secretName, with key user[i].name
+    # acl will be from secretName, with key user[i].name-'acl'
+    # password will be from secretName, with key user[i].name-'pass'
   aclDefinitionsSecretRef: valkey-poc-acl-defs
 status:
   phase: Applied                    # MissingSecret, IncompleteSecret, Applying, Applied, Error
@@ -201,8 +207,8 @@ metadata:
   name: valkey-poc-acl-defs
 type: Opaque
 stringData:
-  # valkey-admin-acl: "+@all ~*"   # harcoded, they will be minimal
-  valkey-admin-pass: "myPass"
+  primary-replication-pass: "myClusterReplicationPass" 
+  valkey-admin-pass: "myAdminPass"
   valkey-user-acl: "+GET +SET ~app:*"
   valkey-user-pass: "otherPass"
 ```

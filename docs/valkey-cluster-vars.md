@@ -237,3 +237,75 @@ Legend:
 | PDB  | Pod Disruption Budget                              |
 | Upd  | Statefulset - Update Strategy - On Delete          |
 | VH   | Api Validation Hook                                |
+
+## CSI Secrets
+
+Secrets can be managed in a cluster also from an external provider, like a Vault. In order to use them, the following steps are to be followed (example for Azure KeyVault):
+
+1. Install the drivers
+
+```sh
+helm repo add secrets-store-csi-driver https://kubernetes-sigs.github.io/secrets-store-csi-driver/charts
+helm install csi-secrets-store secrets-store-csi-driver/secrets-store-csi-driver --namespace kube-system --set enableSecretRotation=true
+```
+
+2. Create the CR. It will "expose" the objects from the external provider
+
+```yaml
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: azure-kv-example
+  namespace: default
+spec:
+  provider: azure
+  parameters:
+    usePodIdentity: "false"
+    keyvaultName: "my-keyvault-name"
+    cloudName: "AzurePublicCloud"
+    objects: |
+      array:
+      - objectName: my-secret
+        objectType: secret
+      - objectName: my-cert
+        objectType: cert
+    tenantId: "<your-tenant-id>"
+```
+
+3. Mount the secrets in a pod
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: busybox-secrets
+spec:
+  containers:
+  - name: busybox
+    image: busybox
+    command: [ "sleep", "3600" ]
+    volumeMounts:
+    - name: secrets-store-inline
+      mountPath: "/mnt/secrets-store"
+      readOnly: true
+  volumes:
+  - name: secrets-store-inline
+    csi:
+      driver: secrets-store.csi.k8s.io
+      readOnly: true
+      volumeAttributes:
+        secretProviderClass: "azure-kv-example"
+```
+
+4. (optional) Mount them in a `Secret`
+
+```yaml
+spec:
+  ...
+  secretObjects:
+  - secretName: synced-k8s-secret
+    type: Opaque
+    data:
+    - objectName: my-secret
+      key: password
+```
