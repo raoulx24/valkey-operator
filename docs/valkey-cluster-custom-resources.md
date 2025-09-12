@@ -176,9 +176,8 @@ spec:
     password:
       key: valkey-admin-pass
     # acl: "+@all ~*"               # harcoded, they will be minimal
-  # imutable after creation (?)
   replication-user:
-    name: primary-replication-user
+    name: primary-replication-user  # if empty, legacy mode used, the pass will be used from admin-user (they must match)
     password:
       key: primary-replication-pass
     # acl: "+replication"           # harcoded, they will be minimal
@@ -295,15 +294,15 @@ kind: ValkeyCA
 metadata:
   name: valkey-root-ca
 spec:
-  description: "Root CA for Valkey TLS/mTLS"
-  caCertSecretRef: valkey-root-ca-cert     # Secret containing the root CA certificate
-  caKeySecretRef: valkey-root-ca-key       # Secret containing the root CA private key
-  validForDays: 3650                       # Optional: validity period for issued certs
+  description: "Root CA for Valkey (TLS)/mTLS"
+  secretType: Secret                       # Secret, SecretsStore
+  caCertSecretRef: valkey-root-ca-cert     # Secret containing the root CA certificate and key
+  validForDays: 3650                       # validity period for issued certs - only if operator is the issuer
 ```
 
 ```yaml
 # this is created upon valkey cluster creation (note ownerReferences)
-# it is the intermediate CA for mTLS and TLS
+# it is the intermediate CA for mTLS and (possible (TLS)
 apiVersion: valkey.io/v1alpha1
 kind: ValkeyCertificateBundle
 metadata:

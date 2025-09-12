@@ -116,12 +116,13 @@ spec:
     spec:
       initContainers:
       - name: init-valkey-sysctl
-        image: busybox
+        image: ghcr.io/valkeyoperatorsidecar
         imagePullPolicy: IfNotPresent
-        command:
-        - sysctl
-        - -w
-        - net.core.somaxconn=10000
+        env:
+        # sysctl -w net.core.somaxconn=10000
+        # it is mandatory to have securityContext.privileged: true
+        - name: SET_SOMAXCONN
+          value: "true"
         securityContext:
           privileged: true
       containers:
@@ -239,11 +240,35 @@ spec:
           name: valkey-poc
           defaultMode: 493
       - name: tls-volume
+        # csi and secret are mutually exclusive
+        csi:
+          driver: secrets-store.csi.k8s.io
+          readOnly: true
+          volumeAttributes:
+            secretProviderClass: "valkey-poc-tls-secret"
         secret:
           secretName: valkey-poc-tls-secret
       - name: mtls-volume
+        # csi and secret are mutually exclusive
+        csi:
+          driver: secrets-store.csi.k8s.io
+          readOnly: true
+          volumeAttributes:
+            secretProviderClass: "valkey-poc-mtls-secret"
         secret:
           secretName: valkey-poc-mtls-secret
+      - name: acl-volume
+        # csi and secret are mutually exclusive
+        csi:
+          driver: secrets-store.csi.k8s.io
+          readOnly: true
+          volumeAttributes:
+            secretProviderClass: "valkey-poc-acl-secret"
+        secret:
+          secretName: valkey-poc-acl-secret
+      - name: configs-volume
+        emptyDir:
+          size: 1Mi
       - name: tmp-volume
         emptyDir:
           sizeLimit: 1024Mi

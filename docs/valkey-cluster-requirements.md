@@ -296,3 +296,18 @@ Actual Known Deps:
 **Valkey /data** - accesible also from sidecar  
 **Valkey /tmp** - common between containers
 
+
+## To be added
+
+**Certificate Authority (CA):** The CA used for mTLS can be either internally generated or externally provided (eg, via Vault, cert-manager, or a preloaded Secret). This flexibility allows alignment with different compliance and operational models.
+
+**mTLS Intermediate & Certificates:** The operator issues intermediate certificates for mTLS between itself and the sidecar. These certificates are scoped per Valkey cluster and stored securely in Kubernetes Secrets. Rotation is automated and tracked via custom resources (ValkeyCertificateBundle), ensuring lifecycle observability.
+
+**Init Container Bootstrapping:** An init container is responsible for preparing the runtime environment for both Valkey and its sidecar. It handles certificate retrieval, identity configuration, and role assignment, ensuring that each pod starts with the correct security context.
+
+**AuthN/AuthZ via SPIFFE-style SANs:** Identity validation is enforced using SPIFFE-style SANs embedded in certificates. The operator and sidecar mutually verify each other's identities, with contextual checks (e.g., DNS, IP, cluster membership) to prevent impersonation and ensure secure coordination.
+
+**Unbound Cluster Mode:** For high-security or air-gapped environments, the operator supports a “detached” mode. In this configuration:
+- the Valkey cluster is scaffolded and handed off.
+- sidecars remain but become opaque—no mTLS or coordination required.
+- certificate rotation is relying on external secrets and operator-driven lifecycle management is disabled

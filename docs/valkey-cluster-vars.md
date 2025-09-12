@@ -88,9 +88,14 @@ Valkey stores ACLs in memory. To persist them, use the aclfile directive in `val
 aclfile /etc/valkey-acl/users.acl
 ```
 Export your ACL rules
-```sh
+```resp
 # ensures your ACLs survive restarts and are version-controlled if needed.
 ACL SAVE
+```
+
+Regarding password rotation, Valkey allows multiple passwords per user, so both will be valid.
+```resp
+ACL SETUSER replicator on >old-password >new-password +replication
 ```
 
 ## TLS
