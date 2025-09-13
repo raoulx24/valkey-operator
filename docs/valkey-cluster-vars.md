@@ -81,11 +81,16 @@ ACL SETUSER valkey-admin on >myValkeyAdminPass +@all ~*
 ACL SETUSER default off
 # or restrict it severely
 ACL SETUSER default on >someOtherPassword -@all ~none
+# for replication
+ACL SETUSER replicator on >replica-password +@replication
 ```
 3. Persist ACLs Securely
 Valkey stores ACLs in memory. To persist them, use the aclfile directive in `valkey.conf`:
 ```ini
 aclfile /etc/valkey-acl/users.acl
+# important: we also need the info for replication
+masteruser replicator
+masterauth replica-password
 ```
 Export your ACL rules
 ```resp
@@ -314,3 +319,26 @@ spec:
     - objectName: my-secret
       key: password
 ```
+
+## oliver006/redis_exporter
+
+sample-pwd-file.json
+```json
+{
+  "redis://localhost:16379": "",
+  "redis://exporter@localhost:16390": "exporter-password",
+  "redis://localhost:16380": "redis-password",
+  "rediss://localhost:6379": "tls-enabled-redis-password"
+}
+```
+
+Hot reload of pwd file
+```sh
+curl -X POST http://localhost:9121/-/reload
+```
+
+ACL for cluster
+```resp
+ACL SETUSER <<<USERNAME>>> -@all +@connection +memory -readonly +strlen +config|get +xinfo +pfcount -quit +zcard +type +xlen -readwrite -command +client -wait +scard +llen +hlen +get +eval +slowlog +cluster|info +cluster|slots +cluster|nodes -hello -echo +info +latency +scan -reset -auth -asking ><<<PASSWORD>>>
+```
+

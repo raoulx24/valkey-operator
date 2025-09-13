@@ -3,7 +3,7 @@ kind: ConfigMap
 metadata:
   name: valkey-poc
 data:
-  valkey.conf: |
+  valkey-base.conf: |
     masteruser primary-replication-user
     masterauth primary-replication-password
 
@@ -31,7 +31,8 @@ data:
     appendfsync everysec              # Fsync policy: always, everysec, or no
     auto-aof-rewrite-percentage 100
     auto-aof-rewrite-min-size 64mb
-
+  sidecar-conf: |
+    unbound-cluster: false
 ---
 apiVersion: v1
 kind: Secret
@@ -125,6 +126,31 @@ spec:
           value: "true"
         securityContext:
           privileged: true
+        volumeMounts:
+        - name: valkey-poc-data
+          mountPath: /data
+        - name: valkey-certs-volume
+          mount-path: "/etc/valkey-cluster/valkey-certs"
+        - name: valkey-configs-volume
+          mount-path: "/etc/valkey-cluster/valkey-configs"
+        - name: exporter-certs-volume
+          mountPath: "/etc/valkey-cluster/exporter-certs"
+        - name: exporter-configs-volume
+          mountPath: "/etc/valkey-cluster/exporter-configs"
+        - name: tmp-volume
+          mountPath: /tmp
+        - name: valkey-base-config-volume
+          mountPath: /etc/valkey-cluster/base-config
+          readOnly: true
+        - name: tls-volume
+          mountPath: "/etc/valkey-cluster/tls"
+          readOnly: true
+        - name: mtls-volume
+          mountPath: "/etc/valkey-cluster/mtls"
+          readOnly: true
+        - name: acl-volume
+          mountPath: "/etc/valkey-cluster/acl"
+          readOnly: true
       containers:
       - name: valkey
         image: valkey/valkey-bundle:8.1.1-alpine
@@ -150,7 +176,7 @@ spec:
               name: valkey-poc
               key: valkey-cluster-pass  # TBD - to define this as protected
         - name: VALKEY_EXTRA_FLAGS
-          value: --masterauth $(VALKEY_CLUSTER_PASS) --cluster-announce-ip $(POD_NAME).$(CLUSTER_SUFFIX)
+          value: "--cluster-announce-ip $(POD_NAME).$(CLUSTER_SUFFIX)"
         ports:
         - containerPort: 6379
           name: resp
@@ -166,13 +192,13 @@ spec:
             cpu: 200m
             memory: 256Mi
         volumeMounts:
-        - name: conf
-          mountPath: /data/valkey.conf
-          subPath: valkey.conf
         - name: valkey-poc-data
           mountPath: /data
-        - name: tls-volume
-          mountPath: "/etc/valkey-cluster/tls"
+        - name: valkey-certs-volume
+          mount-path: "/etc/valkey-cluster/valkey-certs"
+          readOnly: true
+        - name: valkey-configs-volume
+          mount-path: "/etc/valkey-cluster/valkey-configs"
           readOnly: true
         - name: tmp-volume
           mountPath: /tmp
@@ -209,36 +235,74 @@ spec:
         volumeMounts:
         - name: valkey-poc-data
           mountPath: /data
+        - name: valkey-certs-volume
+          mount-path: "/etc/valkey-cluster/valkey-certs"
+        - name: valkey-configs-volume
+          mount-path: "/etc/valkey-cluster/valkey-configs"
+        - name: exporter-certs-volume
+          mountPath: "/etc/valkey-cluster/exporter-certs"
+        - name: exporter-configs-volume
+          mountPath: "/etc/valkey-cluster/exporter-configs"
         - name: tmp-volume
           mountPath: /tmp
+        - name: valkey-base-config-volume
+          mountPath: /etc/valkey-cluster/base-config
+          readOnly: true
         - name: tls-volume
           mountPath: "/etc/valkey-cluster/tls"
           readOnly: true
         - name: mtls-volume
           mountPath: "/etc/valkey-cluster/mtls"
           readOnly: true
+        - name: acl-volume
+          mountPath: "/etc/valkey-cluster/acl"
+          readOnly: true
       - name: valkey-exporter
         image: oliver006/redis_exporter:v1.67.0-alpine
         imagePullPolicy: IfNotPresent
         env:
-        - name: REDIS_ADDR
-          value: redis://127.0.0.1:6379
-        - name: REDIS_PASSWORD   # TBD - acl and dedicated ro user missing
-          valueFrom:
-            secretKeyRef:
-              key: valkey-pass
-              name: vlk-secret
+        - name: REDIS_EXPORTER_TLS_CLIENT_CERT_FILE
+          value: /etc/valkey-cluster/exporter-certs/client.crt
+        - name: REDIS_EXPORTER_TLS_CLIENT_KEY_FILE
+          value: /etc/valkey-cluster/exporter-certs/client.key
+        - name: REDIS_EXPORTER_TLS_CA_CERT_FILE
+          value: /etc/valkey-cluster/exporter-certs/ca.crt
+        - name: REDIS_EXPORTER_REDIS_PASSWORD_FILE
+          value: /etc/valkey-cluster/exporter-configs/pwd-file.json
         name: valkey-exporter
         ports:
         - containerPort: 9121
           name: exporter-port
           protocol: TCP
+        volumeMounts:
+        - name: exporter-certs-volume
+          mountPath: "/etc/valkey-cluster/exporter-certs"
+          readOnly: true
+        - name: exporter-configs-volume
+          mountPath: "/etc/valkey-cluster/exporter-configs"
+          readOnly: true
+        - name: tmp-volume
+          mountPath: "/tmp"
       terminationGracePeriodSeconds: 30
       volumes:
-      - name: conf
+      - name: valkey-certs-volume
+        emptyDir:
+          size: 1Mi
+      - name: valkey-configs-volume
+        emptyDir:
+          size: 1Mi
+      - name: exporter-certs-volume
+        emptyDir:
+          size: 1Mi
+      - name: exporter-configs-volume
+        emptyDir:
+          size: 1Mi
+      - name: tmp-volume
+        emptyDir:
+          sizeLimit: 1024Mi
+      - name: valkey-base-config-volume
         configMap:
           name: valkey-poc
-          defaultMode: 493
       - name: tls-volume
         # csi and secret are mutually exclusive
         csi:
@@ -249,12 +313,6 @@ spec:
         secret:
           secretName: valkey-poc-tls-secret
       - name: mtls-volume
-        # csi and secret are mutually exclusive
-        csi:
-          driver: secrets-store.csi.k8s.io
-          readOnly: true
-          volumeAttributes:
-            secretProviderClass: "valkey-poc-mtls-secret"
         secret:
           secretName: valkey-poc-mtls-secret
       - name: acl-volume
@@ -266,12 +324,6 @@ spec:
             secretProviderClass: "valkey-poc-acl-secret"
         secret:
           secretName: valkey-poc-acl-secret
-      - name: configs-volume
-        emptyDir:
-          size: 1Mi
-      - name: tmp-volume
-        emptyDir:
-          sizeLimit: 1024Mi
   updateStrategy:
     type: OnDelete
   volumeClaimTemplates:

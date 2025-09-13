@@ -169,25 +169,8 @@ metadata:
   name: valkey-poc-acl
 spec:
   # the generated secret that will be mounted in valkey nodes
-  secretName: valkey-poc-acl
+  secretName: valkey-poc-acl-defs
   secretType: Secret                # Secret, SecretsStore
-  admin-user:
-    name: valkey-admin              # if empty, legacy mode used (with "default" user)
-    password:
-      key: valkey-admin-pass
-    # acl: "+@all ~*"               # harcoded, they will be minimal
-  replication-user:
-    name: primary-replication-user  # if empty, legacy mode used, the pass will be used from admin-user (they must match)
-    password:
-      key: primary-replication-pass
-    # acl: "+replication"           # harcoded, they will be minimal
-  clusterPassword: "cluster-secret-pass"
-    key: cluster-password
-  users:
-  - name: "valkey-user"
-    # acl will be from secretName, with key user[i].name-'acl'
-    # password will be from secretName, with key user[i].name-'pass'
-  aclDefinitionsSecretRef: valkey-poc-acl-defs
 status:
   phase: Applied                    # MissingSecret, IncompleteSecret, Applying, Applied, Error
   nodes:
@@ -206,10 +189,22 @@ metadata:
   name: valkey-poc-acl-defs
 type: Opaque
 stringData:
-  primary-replication-pass: "myClusterReplicationPass" 
-  valkey-admin-pass: "myAdminPass"
-  valkey-user-acl: "+GET +SET ~app:*"
-  valkey-user-pass: "otherPass"
+  acl-deffinitions: |
+    # for password rotation, multiple passwords can be provided
+    valkey-user:
+      name: valkey-admin              # if empty, legacy mode used (with "default" user)
+      pass: ["myAdminPass"]
+      # acl: "+@all ~*"               # harcoded, it will be minimal
+    replication-user:
+      name: primary-replication-user  
+      pass: ["myClusterReplicationPass"]
+      # acl: "+@replication"          # harcoded, they will be minimal
+    users:
+    - name: "valkey-user"
+      pass: ["otherPass"]
+      acl: "+GET +SET ~app:*"
+  acl-deffinitions-backup: |
+    # use this as last known good acl. it can be empty or nil
 ```
 
 ## Valkey Operator Defaults
