@@ -4,15 +4,19 @@ metadata:
   name: valkey-poc
 data:
   valkey-base.conf: |
-    masteruser primary-replication-user
-    masterauth primary-replication-password
-
+    # to be added by the sidecar for cluster replication
+    # the user/pass must exist in acl
+    # masteruser primary-replication-user
+    # masterauth primary-replication-password
+    
+    # cluster related settings
     cluster-enabled yes
     cluster-require-full-coverage no
     cluster-node-timeout 10000
     cluster-config-file /data/nodes.conf
     cluster-migration-barrier 1
-
+    
+    # tls related settings
     tls-port 6379
     port 0
     tls-cert-file /etc/valkey-cluster/tls/server.crt
@@ -21,16 +25,21 @@ data:
     tls-auth-clients yes
     tls-cluster yes
     tls-replication yes
-
+    
+    # db save related settings
     save 60 100
     dbfilename dump.rdb
     dir /data
-
+    
+    # aof related settings
     appendonly yes
     appendfilename "appendonly.aof"
     appendfsync everysec              # Fsync policy: always, everysec, or no
     auto-aof-rewrite-percentage 100
     auto-aof-rewrite-min-size 64mb
+    
+    # acl related settings
+    aclfile /etc/valkey-cluster/valkey-configs/users.acl
   sidecar-conf: |
     unbound-cluster: false
 ---
@@ -137,9 +146,11 @@ spec:
           mountPath: "/etc/valkey-cluster/exporter-certs"
         - name: exporter-configs-volume
           mountPath: "/etc/valkey-cluster/exporter-configs"
+        - name: sidecar-tranzit-volume
+          mountPath: /opt/valkey-operator-sidecar/tranzit
         - name: tmp-volume
           mountPath: /tmp
-        - name: valkey-base-config-volume
+        - name: sidecar-base-config-volume
           mountPath: /etc/valkey-cluster/base-config
           readOnly: true
         - name: tls-volume
@@ -243,9 +254,11 @@ spec:
           mountPath: "/etc/valkey-cluster/exporter-certs"
         - name: exporter-configs-volume
           mountPath: "/etc/valkey-cluster/exporter-configs"
+        - name: sidecar-tranzit-volume
+          mountPath: /opt/valkey-operator-sidecar/tranzit
         - name: tmp-volume
           mountPath: /tmp
-        - name: valkey-base-config-volume
+        - name: sidecar-base-config-volume
           mountPath: /etc/valkey-cluster/base-config
           readOnly: true
         - name: tls-volume
@@ -297,10 +310,13 @@ spec:
       - name: exporter-configs-volume
         emptyDir:
           size: 1Mi
+      - name: sidecar-tranzit-volume
+        emptyDir:
+          sizeLimit: 1024Mi
       - name: tmp-volume
         emptyDir:
           sizeLimit: 1024Mi
-      - name: valkey-base-config-volume
+      - name: sidecar-base-config-volume
         configMap:
           name: valkey-poc
       - name: tls-volume

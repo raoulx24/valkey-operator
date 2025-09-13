@@ -169,6 +169,7 @@ metadata:
   name: valkey-poc-acl
 spec:
   # the generated secret that will be mounted in valkey nodes
+  # imutable
   secretName: valkey-poc-acl-defs
   secretType: Secret                # Secret, SecretsStore
 status:
@@ -189,21 +190,24 @@ metadata:
   name: valkey-poc-acl-defs
 type: Opaque
 stringData:
-  acl-deffinitions: |
+  acl-definitions.yaml: |
     # for password rotation, multiple passwords can be provided
     valkey-user:
       name: valkey-admin              # if empty, legacy mode used (with "default" user)
+      # important: if there are several passwords, the first one will be picked by sidecar
       pass: ["myAdminPass"]
       # acl: "+@all ~*"               # harcoded, it will be minimal
     replication-user:
-      name: primary-replication-user  
+      name: primary-replication-user
+      # important: if there are several passwords, the first one will be picked in valkey.conf
+      # this means that if password rotation is required, the first one is the new one, and the rest are old
       pass: ["myClusterReplicationPass"]
       # acl: "+@replication"          # harcoded, they will be minimal
     users:
     - name: "valkey-user"
       pass: ["otherPass"]
       acl: "+GET +SET ~app:*"
-  acl-deffinitions-backup: |
+  acl-definitions-backup.yaml: |
     # use this as last known good acl. it can be empty or nil
 ```
 

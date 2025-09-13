@@ -93,12 +93,13 @@ All other changes are rejected. Exceptions are pods, for `delete`.
 
 ## `csi secrets` vs `secret` Considerations
 
-A `secret` can be consumed and loaded by the operator, while `csi secrtes` can only be mounted in a pod. Because of this, and because it is desired to have a common approach for both worlds, the **operator** will not manage external provided secrets (by both means).
+A `secret` can be consumed and loaded by the **operator**, while `csi secrtes` can only be mounted in a pod. Because of this, and because it is desired to have a common approach for both worlds, the **operator** will not manage external provided secrets (by both means).
 
 The only secrets creted by it are intermediate and client/server certificates used internally by mTLS. Main two reasons:
 -  it is extremely complicated for an external party to generate all needed certificates, with proper SPIFFE-style SANs for authorization
 - it is imperative that the communication between **operator** and **sidecars** is not hampered by some misconfigured certificates
-The only exception is when the cluster is created directly unbound
+
+The only exception is when the cluster is created directly unbound, when there is no mTLS, so no need for related certificates.
 
 ## TLS
 
@@ -143,16 +144,14 @@ Subphase 1 - preparation - all steps are in paralel:
 1. **Operator** opens a channel to **sidecar** in replica pod
 2. **Operator** announces the intent of delete
 3. **Sidecar** makes a last verification that is a replica and aknoledges. If not, the entire process is restarted.
-4. **Sidecar** will not block/delay the restart (possible usage of `lifecycle: prestop:`)
+4. **Sidecar** will not block/delay the restart (usage of `lifecycle.prestop:`)
 
 Subpahse 2 - aknowledges await - here **operator** waits for all replicas' okays.  
 
-Subphase 3 - restarts - all steps are sequential (*TBD* should they be in paralel? I do not see why not. if so, take care also of the `PDB`):
-1. **Operator** removes `finalizers: - valkey.io/finalize`
-2. **Operator** deletes the pod
-3. Upon recreation of pod, **operator** applies back `finalizers: - valkey.io/finalize`
-3. **Operator** waits for the pods to be online + sidecar
-4. *TBD* what to do with DNS TTL issue. should it wait after the last one the duration of TTL?
+Subphase 3 - restarts - all steps are sequential:
+1. **Operator** deletes the pod
+2. **Operator** waits for the pods to be online + sidecar
+3. *TBD* what to do with DNS TTL issue. should it wait after the last one the duration of TTL?
 
 Phase 2 - primaries/replicas switch - all steps are sequential. this is a moment of disrupture
 1. **Operator** chooses a replica and opens a channel
@@ -168,8 +167,6 @@ When user runs `kubectl rollout restart statefulset` (or eq), kubernetes sets a 
 
 **Operator** will detect this change and will trigger a rollout restart.
 
-TBD - mainly it is Pod deletion blocking for all, one by one
-
 ## Pods deletion blocking
 
 TBD - to make it more clear, also to explain what to implement and how (from ways of blocking). sigterm trap for sidecar is missing (do we need this if valkey-preStop.sh exists?). and operator promoting primaries. and DNS issue with headless svc. and status in CRs is missing
@@ -177,13 +174,14 @@ TBD - to make it more clear, also to explain what to implement and how (from way
 In order to block/delay pod deletion, the following will be implemented:
 | What | Where | Comments |
 |------|-------|----------|
-| `finalizers: - valkey.io/finalizer` | Pod | _TBD_ do we really need this? it appeared as a mean of blocking rolling restarts/updates |
 | `updateStrategy: type: OnDelete` | Statefulset | it will make manual pod delete mandatory in order to change anything |
 | `lifecycle: preStop: exec: ` | Containers | on all of them. Upon pod delete, the `valkey-preStop.sh` will be executed |
 
 The `valkey-preStop.sh` file is watched for by **sidecar**
-- if there were no messages from **operator**, the **sidecar** will signal back to operator that an unexpected delete is taking place. If primary node, the **operator** will apply Phase 2 from _Rolling restarts_, and will signal **sidecar** to continue with pod delete, **sidecar** will delete the file `/tmp/pod-deleted-signal.txt`
-- if it is a planned delete, the sidecar will just delete the `/tmp/pod-deleted-signal.txt` file
+- (bound cluster) if there were no messages from **operator**, the **sidecar** will signal back to operator that an unexpected delete is taking place. If primary node, the **operator** will apply Phase 2 from _Rolling restarts_, and will signal **sidecar** to continue with pod delete, **sidecar** will delete the file `/tmp/pod-deleted-signal.txt`
+- (bound cluster) if it is a planned delete, the sidecar will just delete the `/tmp/pod-deleted-signal.txt` file
+- (unbound cluster) **sidecar** will check if node is a primary, and if so, it will contact directly a replica and execute `CLUSTER FAILOVER` and waits for its change. After, it will delete the file `/tmp/pod-deleted-signal.txt`
+
 
 ### valkey-preStop.sh script
 ```sh
@@ -240,7 +238,56 @@ aclfile /etc/valkey/acl/users.acl
 ```
 
 ### Secret rotation
-When a change in `ValkeyClusterAcl` or in secret is detected and reconciled, the following happens:
+When in secret is detected, the following happens:
+
+Phase 1
+1. **Sidecar** checks the file `acl-definitions.yaml` from `/etc/valkey-cluster/acl`. Blocking if user for replication has changed or its password does not contain the actual one
+2. If the file is ok, **sidecar** will prepare the `/etc/valkey-operator-sidecar/tranzit/users.acl` file
+3. **Sidecar** will get current node type (primary/replica) and will signal **operator** new acl received (node type, acl sha256)
+
+Phase 2
+1. **Operator**, on first announcement, will change `PDB` to `100%`
+2. **Operator** waits for all signals from **sidecars**. And a timeout here? 1m? 2m?
+3. If all have same sha256, will continue. If not... what? beside a nice status in ACL CR?
+
+Phase 3
+1. **Operator** opens channel with all primaries and ask for ACL change
+2. **sidecar** will run `ACL LOAD` in Valkey
+3. (_only if `masterauth` changed_) **Sidecar** change pass in `valkey.conf`
+4. **Sidecar** reports status back to **operator** status ok
+5. **Sidecar** saves the `acl-definitions.yaml` file in `/opt/valkey-operator-sidecar/tranzit`
+
+Phase 4
+1. **Operator** opens channel with all replicas and ask for ACL change
+2. **sidecar** will run `ACL LOAD` in Valkey
+3. (_only if `masterauth` changed_) **Sidecar** change pass in `valkey.conf` and run `CONFIG SET masterauth newpass`
+4. **Sidecar** reports status back to **operator** status ok
+5. **Sidecar** saves the `acl-definitions.yaml` file in `/opt/valkey-operator-sidecar/tranzit`
+
+Phase 5
+**Operator** changes back `PDB` to `N-1`
+
+_end of secret rotation_
+
+> **Hint:** a user can have multiple passwords in acl file. Also, test the ACL before making it permanent
+
+If point 1 - 3 are not ok, **sidecar** will check if `acl-definitions-backup.yaml` file exists.
+- If yes, it will check if it is the same with existing `/opt/valkey-operator-sidecar/tranzit/acl-definitions.yaml`.
+  - if ok, it will create file `/data/use-acl-backup-signal.txt`. init container will use this
+  - If not, it will signal the operator that the backup is not ok
+- If not, the cluster is close to being unusable on restart
+
+> **Important** if we have failures here, it is a make or break. It can render the cluster unusable on restart.
+
+```resp
+CONFIG SET masterauth newpass
+```
+
+
+
+
+
+
 1. **Operator** creates the new secret with the rendered users.acl
 2. **Operator** opens grpc with all sidecars
 3. **Operator** confirms with all sidecars that ACL file is ok (do we need to test k8s here?)
