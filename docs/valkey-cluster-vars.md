@@ -103,6 +103,66 @@ Regarding password rotation, Valkey allows multiple passwords per user, so both 
 ACL SETUSER replicator on >old-password >new-password +replication
 ```
 
+## ACL File Format
+
+Valkey ACL files are plain text files containing one or more ACL SETUSER commands. Each line defines a user and their permissions using a domain-specific language (DSL).
+
+```resp
+ACL SETUSER <username> [rules...]
+```
+Each rule modifies the user's state, authentication, or access rights.
+
+### Parameter Types
+
+| Param Type | Description                                                            |
+|------------|------------------------------------------------------------------------|
+| username   | unique identifier for the user                                         |
+| flags      | keywords that toggle user state (e.g., `on`, `off`, `nopass`)          |
+| passwords  | plaintext (`>password`) or SHA256 hash (`#hash`)                       |
+| commands   | command categories (`+@read`, `+@write`) or specific commands (`+GET`) |
+| keys       | Key patterns using glob-style matching (`~reports:*`)                  |
+| channels   | Pub/Sub channel patterns (`&news:*`)                                   |
+| selectors  | Advanced permission blocks (optional, for scoped access control)       |
+
+### Rule Constraints
+
+1. User Flags  
+**Format:**  
+`on` / `off`: Enables or disables the user  
+`nopass`: Allows login without a password  
+`sanitize-payload`: Hides sensitive command payloads in logs  
+    > Must include either on or off. nopass and sanitize-payload are optional
+
+2. Passwords  
+**Format:** `>plaintext` or `#SHA256hash`  
+    > Multiple passwords allowed. Must be unique per user  
+    > Plaintext must be prefixed with `>`; hash must be valid SHA256 and prefixed with `#`
+    > Only printable chars are accepted, except _space_. Regex: `^[\x21-\x7E]{16,128}$`
+
+3. Command Permissions  
+**Categories:** `+@read`, `+@write`, `+@admin`  
+**Specific commands:** `+GET`, `-FLUSHALL`  
+    > Negation: Use - to revoke access  
+    > Must start with `+` or `-`. Categories must be valid ACL groups. Commands must be known Valkey commands
+
+4. Key Patterns  
+**Format:** `~pattern`  
+**example** `reports:my[cp]ut?er*` will match _mycutters_, _mtputiereles_  
+    > Supports glob-style matching (`*`, `?`, `[]`). example `reports:my[cp]ut?er* will match  
+    > Must start with ~. Pattern must be syntactically valid
+
+5. Channel Patterns  
+**Format:** `&pattern``  
+    > Same matching rules as keys  
+    > Must start with `&`. Pattern must be valid
+
+6. Selectors (Advanced)  
+**Format:** `selectorname (+command ~keypattern &channelpattern)`
+    > `selectorname` is optional. the rest are as above  
+    > They are grouped inside `(` and `)`
+
+More on [Valkey ACL page](https://valkey.io/topics/acl/).
+
 ## TLS
 
 | TLS Setting        | Purpose                      | Example                      |

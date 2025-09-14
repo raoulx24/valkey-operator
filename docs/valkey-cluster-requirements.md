@@ -201,37 +201,12 @@ echo "Signal file deleted. Exiting."
 
 ## ACL creation and rotation
 
-### Creation
-Store pregenerated ACL file as a Kubernetes Secret
+Upon pod start, the following happens:
+1. **Init container** checks the file `acl-definitions.yaml` from `/etc/valkey-cluster/acl`. Blocking if user for replication has changed or its password does not contain the actual one
+2. If the file is ok, **init container** will prepare the `/etc/valkey-operator-sidecar/tranzit/users.acl` file
+3. **Init container** will create entry in `valkey.conf` for `masterauth` with password
 
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: valkey-poc-acl
-type: Opaque
-stringData:
-  users.acl: |
-    user admin on >StrongPassword +@all ~*
-```
 
-Mount it as a read-only volume:
-```yaml
-# container spec
-volumeMounts:
-- name: users-acl-volume
-  mountPath: /etc/valkey/acl
-  readOnly: true
-# ...
-# pod spec
-volumes:
-- name: users-acl-volume
-  secret:
-    secretName: valkey-poc-acl
-    items:
-    - key: users.acl
-      path: users.acl
-```
 Reference it in `valkey.conf`:
 ```ini
 aclfile /etc/valkey/acl/users.acl
