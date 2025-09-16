@@ -54,6 +54,17 @@ The Operator SDK (Go-based) scaffolds a controller that can:
 - Integrate with tracing if your operator spans multiple systems.
 
 ## Valkey ACL
+
+### Some considerations related to ACL in Valkey
+
+ACL is the most crucial setting in good functionning of a cluster, maybe same level as networking and maybe above TLS.
+
+The most critical moment is when the pod is starting. If `aclfile /etc/valkey-acl/users.acl` is provided in valkey.conf and the file is corrupt, the startup of the cluster is in a bad shape.
+1. primaries will start, but no ACL. This means no user, no pass, no nothing. They are bare open
+2. replicas will start the cycle of restarts, as they are not able to connect to primaries (if primaries still have ACL)
+
+### ACL 'way-of-life'
+
 Valkey ACL is built to be backward-compatible. That means, by default, Valkey ships with a built-in user called `default`, which has full access to all commands and keys unless explicitly restricted. It is the infered user for legacy mode, where no user is provided.
 ```sh
 # legacy mode, "default" is infered
@@ -273,7 +284,6 @@ spec:
 
 **Intercept deletion:** When a Pod is marked for deletion, Kubernetes sets `metadata.deletionTimestamp`.
 
-
 ## How a pod can be deleted
 
 ### Voluntary Deletion Scenarios (Intentional)
@@ -379,6 +389,16 @@ spec:
     - objectName: my-secret
       key: password
 ```
+
+## `csi secrets` vs `secret` Considerations
+
+A `secret` can be consumed and loaded by the **operator**, while `csi secrtes` can only be mounted in a pod. Because of this, and because it is desired to have a common approach for both worlds, the **operator** will not manage external provided secrets (by both means).
+
+The only secrets creted by it are intermediate and client/server certificates used internally by mTLS. Main two reasons:
+-  it is extremely complicated for an external party to generate all needed certificates, with proper SPIFFE-style SANs for authorization
+- it is imperative that the communication between **operator** and **sidecars** is not hampered by some misconfigured certificates
+
+The only exception is when the cluster is created directly unbound, when there is no mTLS, so no need for related certificates.
 
 ## oliver006/redis_exporter
 

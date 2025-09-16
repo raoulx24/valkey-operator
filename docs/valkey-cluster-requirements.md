@@ -91,16 +91,6 @@ All other changes are rejected. Exceptions are pods, for `delete`.
 - **Sidecar** initiated - Heartbits or major events: HTTP/1.1. Major events can be Valkey failed, someone deleted the pod
 - **Operator** initiated - rest of communication: gRPC - only **orchestrator** open channels to needed **sidecars** when orchestration is triggered. Even use short-lived gRPC streams if needed.
 
-## `csi secrets` vs `secret` Considerations
-
-A `secret` can be consumed and loaded by the **operator**, while `csi secrtes` can only be mounted in a pod. Because of this, and because it is desired to have a common approach for both worlds, the **operator** will not manage external provided secrets (by both means).
-
-The only secrets creted by it are intermediate and client/server certificates used internally by mTLS. Main two reasons:
--  it is extremely complicated for an external party to generate all needed certificates, with proper SPIFFE-style SANs for authorization
-- it is imperative that the communication between **operator** and **sidecars** is not hampered by some misconfigured certificates
-
-The only exception is when the cluster is created directly unbound, when there is no mTLS, so no need for related certificates.
-
 ## TLS
 
 If `externalCerts` is provided in `ValkeyClusterTls`, it will be validated in **init-container** or **sidecar**.  
@@ -132,7 +122,7 @@ TBD - status in CRs
 
 ## Rolling restarts
 
-When an **operator** rolling restart is triggered, the **operator** doesn't simulate a kubernetes one  ans in it will not restart pods from last to first, but will first restart all replicas (slaves), then will switch all primaries to replicas, and then will restart previous primaries (now replicas).
+When an **operator** rolling restart is triggered, the **operator** doesn't simulate a kubernetes one, as in it will not restart pods from last to first, but will first restart all replicas (slaves), then will switch all primaries to replicas, and then will restart previous primaries (now replicas).
 
 > **Important:** all actions are taking place only if the cluster is healthy. The check is before and after all (sub)phases
 
@@ -182,7 +172,6 @@ The `valkey-preStop.sh` file is watched for by **sidecar**
 - (bound cluster) if it is a planned delete, the sidecar will just delete the `/tmp/pod-deleted-signal.txt` file
 - (unbound cluster) **sidecar** will check if node is a primary, and if so, it will contact directly a replica and execute `CLUSTER FAILOVER` and waits for its change. After, it will delete the file `/tmp/pod-deleted-signal.txt`
 
-
 ### valkey-preStop.sh script
 ```sh
 #!/bin/sh
@@ -201,56 +190,100 @@ echo "Signal file deleted. Exiting."
 
 ## ACL creation and rotation
 
+### Pod startup - **init-container**
 Upon pod start, the following happens:
-1. **Init container** checks the file `acl-definitions.yaml` from `/etc/valkey-cluster/acl`. Blocking if user for replication has changed or its password does not contain the actual one
-2. If the file is ok, **init container** will prepare the `/etc/valkey-operator-sidecar/tranzit/users.acl` file
-3. **Init container** will create entry in `valkey.conf` for `masterauth` with password
-
-
-Reference it in `valkey.conf`:
+1. **Init container** checks the file `acl-definitions.yaml` from `/etc/valkey-cluster/acl`
+2. If the file is ok, **init container** will prepare the `/etc/valkey-operator-sidecar/tranzit/users.acl` file, will create `/etc/valkey-cluster/valkey-configs/valkey.conf` file from `/etc/valkey-cluster/base-config/valkey-base.conf` and will add in it
 ```ini
+user __valkey_admin_name__ on >__valkey_admin_pass__ +@all ~*
+user __primary_replication_user__ on >__primary_replication_pass__ +@all ~*
+  
+masteruser __primary_replication_user__
+masterauth __primary_replication_pass__
+
 aclfile /etc/valkey/acl/users.acl
 ```
 
+#### Errors mitigations:
+_(Bound cluster)_ If any of the following (and check for all)
+- the file `/etc/valkey-cluster/acl/acl-definitions.yaml` is corrupt
+- missing important info (nodes `valkey-user`, `replication-user` and their fields)
+- user for replication has changed or its password does not contain the actual one
+
+there will be the following steps:
+- **init-container** signal all errors to **operator** and waits
+- **operator** will change cluster status in CR to `Error` (TBD and more)
+- **operator** will change `PDB` to 100%
+- **operator** will ask a another running pod to provide its running ACL
+- **operator** will provide the ACL to the **init-container**
+- **init-container** will create the ACL file
+
+_(Unbound cluster)_ log the errors, wait for 30s (?) and restart
+
+> **Why restart if _Unbound cluster_ :** there is no mTLS available. There is no way to securely connect to another **sidecar** and retreive the ACL. Also, **sidecars** do not listen in this case
+
+### Pod startup, **sidecar** checks
+After the pod starts, the **sidecar** will connect to Valkey container and will check the ACL. If ACL consists in only those two users (3 including `default`?) and there should be more, the following will happen:
+- for each additional users in `acl-definitions.yaml`, it will try to create them
+- for each success, it will add the line in `users.acl`
+- for each error, it will report back to **operator**, that will change cluster status in CR to `Error` (TBD and more)
+
 ### Secret rotation
-When in secret is detected, the following happens:
+_(Bound clusters)_ When change in secret is detected, the following happens:
 
 Phase 1
-1. **Sidecar** checks the file `acl-definitions.yaml` from `/etc/valkey-cluster/acl`. Blocking if user for replication has changed or its password does not contain the actual one
-2. If the file is ok, **sidecar** will prepare the `/etc/valkey-operator-sidecar/tranzit/users.acl` file
-3. **Sidecar** will get current node type (primary/replica) and will signal **operator** new acl received (node type, acl sha256)
+1. **Sidecar** checks the file `acl-definitions.yaml` from `/etc/valkey-cluster/acl` (the checks from above, done by **init-container**)
+2. If the file is ok, **sidecar** will prepare the `/etc/valkey-operator-sidecar/tranzit/users.acl.new` file
+3. **Sidecar** will backup actual ACL file in `/etc/valkey-operator-sidecar/tranzit/users.acl.backup`
+4. **Sidecar** will get current node type (primary/replica) and will signal **operator** new acl received (node type, acl sha256)
 
 Phase 2
 1. **Operator**, on first announcement, will change `PDB` to `100%`
 2. **Operator** waits for all signals from **sidecars**. And a timeout here? 1m? 2m?
 3. If all have same sha256, will continue. If not... what? beside a nice status in ACL CR?
 
-Phase 3
+Phase 3 (sequential)
 1. **Operator** opens channel with all primaries and ask for ACL change
-2. **sidecar** will run `ACL LOAD` in Valkey
-3. (_only if `masterauth` changed_) **Sidecar** change pass in `valkey.conf`
-4. **Sidecar** reports status back to **operator** status ok
-5. **Sidecar** saves the `acl-definitions.yaml` file in `/opt/valkey-operator-sidecar/tranzit`
+2. **sidecar** copy the new ACL file in its place and will run `ACL LOAD` in Valkey
+3. (_only if `valkey-admin` changed_) **Sidecar** change `valkey.conf` and `user` counterpart
+4. (_only if `masterauth` changed_) **Sidecar** change pass for in `valkey.conf` and `user` counterpart
+5. **Sidecar** reports status back to **operator** status ok
+6. ~~**Sidecar** saves the `acl-definitions.yaml` file in `/opt/valkey-operator-sidecar/tranzit`~~
 
 Phase 4
 1. **Operator** opens channel with all replicas and ask for ACL change
-2. **sidecar** will run `ACL LOAD` in Valkey
-3. (_only if `masterauth` changed_) **Sidecar** change pass in `valkey.conf` and run `CONFIG SET masterauth newpass`
-4. **Sidecar** reports status back to **operator** status ok
-5. **Sidecar** saves the `acl-definitions.yaml` file in `/opt/valkey-operator-sidecar/tranzit`
+2. **sidecar** copy the new ACL file in its place and  will run `ACL LOAD` in Valkey
+3. (_only if `valkey-admin` changed_) **Sidecar** change `valkey.conf` and `user` counterpart; run `CONFIG SET masterauth newpass`
+4. (_only if `masterauth` changed_) **Sidecar** change pass for in `valkey.conf` and `user` counterpart
+5. **Sidecar** reports status back to **operator** status ok
+6. ~~**Sidecar** saves the `acl-definitions.yaml` file in `/opt/valkey-operator-sidecar/tranzit`~~
 
 Phase 5
 **Operator** changes back `PDB` to `N-1`
+
+_(Unbound cluster)_ There will be the following steps:
+Phase 1 (from above)
+1. **Sidecar** checks the file `acl-definitions.yaml` from `/etc/valkey-cluster/acl` (the checks from above, done by **init-container**)
+2. If the file is ok, **sidecar** will prepare the `/etc/valkey-operator-sidecar/tranzit/users.acl.new` file
+3. **Sidecar** will backup actual ACL file in `/etc/valkey-operator-sidecar/tranzit/users.acl.backup`
+
+Phase 4
+2. **sidecar** copy the new ACL file in its place and  will run `ACL LOAD` in Valkey
+3. (_only if `valkey-admin` changed_) **Sidecar** change `valkey.conf` and `user` counterpart; run `CONFIG SET masterauth newpass` (only if replica)
+4. (_only if `masterauth` changed_) **Sidecar** change pass for in `valkey.conf` and `user` counterpart
 
 _end of secret rotation_
 
 > **Hint:** a user can have multiple passwords in acl file. Also, test the ACL before making it permanent
 
-If point 1 - 3 are not ok, **sidecar** will check if `acl-definitions-backup.yaml` file exists.
-- If yes, it will check if it is the same with existing `/opt/valkey-operator-sidecar/tranzit/acl-definitions.yaml`.
-  - if ok, it will create file `/data/use-acl-backup-signal.txt`. init container will use this
-  - If not, it will signal the operator that the backup is not ok
-- If not, the cluster is close to being unusable on restart
+#### Errors mitigations:
+
+_(Bound cluster)_ In Phase 3, if there are errors (and normally it should happen only in first attempt), the following will happen:
+- **Sidecar** will signal this to **operator**
+- **Operator** will change CR status to `Error` (TBD and more), `PDB` will remain 100%
+- **Sidecar** will restore ACL backup with `ACL LOAD`
+
+_(Unbound cluster)_ Sidecar will clearly log the errors and will restore the ACL backup
 
 > **Important** if we have failures here, it is a make or break. It can render the cluster unusable on restart.
 

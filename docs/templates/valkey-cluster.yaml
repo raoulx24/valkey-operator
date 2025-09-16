@@ -4,11 +4,15 @@ metadata:
   name: valkey-poc
 data:
   valkey-base.conf: |
-    # to be added by the sidecar for cluster replication
-    # the user/pass must exist in acl
-    # masteruser primary-replication-user
-    # masterauth primary-replication-password
+    # to be added by sidecar/init-container for malformed ACL failover
+    # user __valkey_admin_name__ on >__valkey_admin_pass__ +@all ~*
+    # user __primary_replication_user__ on >__primary_replication_pass__ +@all ~*
     
+    # to be added by the sidecar/init-container for cluster replication
+    # the user/pass must exist in acl
+    # masteruser __primary_replication_user__
+    # masterauth __primary_replication_pass__
+        
     # cluster related settings
     cluster-enabled yes
     cluster-require-full-coverage no
@@ -39,7 +43,9 @@ data:
     auto-aof-rewrite-min-size 64mb
     
     # acl related settings
+    user default off
     aclfile /etc/valkey-cluster/valkey-configs/users.acl
+    
   sidecar-conf: |
     unbound-cluster: false
 ---
