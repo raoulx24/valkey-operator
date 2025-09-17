@@ -203,12 +203,16 @@ stringData:
       # this means that if password rotation is required, the first one is the new one, and the rest are old
       pass: ["myClusterReplicationPass"]
       # acl: "+@replication"          # harcoded, they will be minimal
+    exporter-user:
+      name: exporter-user
+      # important: if there are several passwords, the first one will be picked in valkey.conf
+      # this means that if password rotation is required, the first one is the new one, and the rest are old
+      pass: ["myExporterPass"]
+      # acl: "+@replication"          # harcoded, they will be minimal
     users:
     - name: "valkey-user"
       pass: ["otherPass"]
       acl: "+GET +SET ~app:*"
-  acl-definitions-backup.yaml: |
-    # use this as last known good acl. it can be empty or nil
 ```
 
 ## Valkey Operator Defaults

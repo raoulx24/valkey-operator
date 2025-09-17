@@ -47,7 +47,25 @@ data:
     aclfile /etc/valkey-cluster/valkey-configs/users.acl
     
   sidecar-conf: |
+    valkey-operator-url: https://valkey-operator.namespace:17379
+
     unbound-cluster: false
+
+    exporterEnabled: true
+  
+  valkey-preStop.sh: |
+    #!/bin/sh
+    
+    # Create the signal file
+    touch /tmp/pod-deleted-signal.txt
+    echo "Waiting for /tmp/pod-deleted-signal.txt to be deleted..."
+    
+    # Loop until the file is gone
+    while [ -f /tmp/pod-deleted-signal.txt ]; do
+      sleep 1
+    done
+    
+    echo "Signal file deleted. Exiting."
 ---
 apiVersion: v1
 kind: Secret
@@ -104,10 +122,8 @@ spec:
 ---
 # TBD - acl created by init container in a shared dir
 # TBD - tls created by init container in a shared dir
+# TBD - tls splitted per server and clients (sidecar and exporter). also change the CRs
 # TBD - valkey.conf created by init container in a shared dir (add also cluster pass there)
-# TBD - add support for secrets-store.csi
-# TBD - add valkey-preStop.sh
-# change init container to valkey-sidecar image
 # add option in CR if sysctl -w - net.core.somaxconn=10000 is needed. NB chown above files to "1000"
 
 apiVersion: apps/v1
@@ -154,6 +170,9 @@ spec:
           mountPath: "/etc/valkey-cluster/exporter-configs"
         - name: sidecar-tranzit-volume
           mountPath: /opt/valkey-operator-sidecar/tranzit
+        - name: valkey-operator-vars-volume
+          mountPath: "/opt/valkey-cluster/vars"
+          readOnly: true
         - name: tmp-volume
           mountPath: /tmp
         - name: sidecar-base-config-volume
@@ -168,6 +187,10 @@ spec:
         - name: acl-volume
           mountPath: "/etc/valkey-cluster/acl"
           readOnly: true
+        ports:
+        - name: grpc
+          containerPort: 17369   # TBD - to define this
+          protocol: TCP
       containers:
       - name: valkey
         image: valkey/valkey-bundle:8.1.1-alpine
@@ -208,6 +231,10 @@ spec:
           requests:
             cpu: 200m
             memory: 256Mi
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh","-c","/opt/valkey-cluster/vars/valkey-preStop.sh"]
         volumeMounts:
         - name: valkey-poc-data
           mountPath: /data
@@ -216,6 +243,9 @@ spec:
           readOnly: true
         - name: valkey-configs-volume
           mount-path: "/etc/valkey-cluster/valkey-configs"
+          readOnly: true
+        - name: valkey-operator-vars-volume
+          mountPath: "/opt/valkey-cluster/vars"
           readOnly: true
         - name: tmp-volume
           mountPath: /tmp
@@ -249,6 +279,10 @@ spec:
             port: liveness
           initialDelaySeconds: 30
           periodSeconds: 30
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh","-c","/opt/valkey-cluster/vars/valkey-preStop.sh"]
         volumeMounts:
         - name: valkey-poc-data
           mountPath: /data
@@ -262,6 +296,9 @@ spec:
           mountPath: "/etc/valkey-cluster/exporter-configs"
         - name: sidecar-tranzit-volume
           mountPath: /opt/valkey-operator-sidecar/tranzit
+        - name: valkey-operator-vars-volume
+          mountPath: "/opt/valkey-cluster/vars"
+          readOnly: true
         - name: tmp-volume
           mountPath: /tmp
         - name: sidecar-base-config-volume
@@ -293,12 +330,19 @@ spec:
         - containerPort: 9121
           name: exporter-port
           protocol: TCP
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh","-c","/opt/valkey-cluster/vars/valkey-preStop.sh"]
         volumeMounts:
         - name: exporter-certs-volume
           mountPath: "/etc/valkey-cluster/exporter-certs"
           readOnly: true
         - name: exporter-configs-volume
           mountPath: "/etc/valkey-cluster/exporter-configs"
+          readOnly: true
+        - name: valkey-operator-vars-volume
+          mountPath: "/opt/valkey-cluster/vars"
           readOnly: true
         - name: tmp-volume
           mountPath: "/tmp"
@@ -322,7 +366,7 @@ spec:
       - name: tmp-volume
         emptyDir:
           sizeLimit: 1024Mi
-      - name: sidecar-base-config-volume
+      - name: valkey-operator-vars-volume
         configMap:
           name: valkey-poc
       - name: tls-volume
@@ -361,3 +405,14 @@ spec:
           storage: 30Gi
       storageClassName: my-storage-class
       volumeMode: Filesystem
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: valkey-poc
+spec:
+  minAvailable: N-1
+  selector:
+    matchLabels:
+      app: valkey-poc
