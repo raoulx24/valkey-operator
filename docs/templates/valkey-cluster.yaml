@@ -52,7 +52,7 @@ data:
     unbound-cluster: false
 
     exporterEnabled: true
-  
+
   valkey-preStop.sh: |
     #!/bin/sh
     

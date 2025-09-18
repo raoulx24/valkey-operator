@@ -260,6 +260,12 @@ status:
   masterCount: 3
   replicasPerMaster: 1
 
+  orchestrationPhase:
+    name: "certRotationInProgress"
+    lastAction: "certUpdateStarted"
+    pendingActions:
+    - "applyACL"
+
   statefulSet:
     name: valkey-poc
 

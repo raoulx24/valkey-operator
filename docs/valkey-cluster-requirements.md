@@ -96,6 +96,10 @@ They will be updated in secret from `tlsSecretName` and mounted in pods.
 
 The secrets can be for server, init-container (should we?), valkey sidecar, or exporter. The process is the same, with the big difference that redis and exporter must be restarted. The certificates are from different volumes (as the sources are different) and stored in different files.
 
+### 
+
+### TLS Rotation
+
 When the secret is changed, the following will happen:
 Phase 1
 1. **Sidecar** will detect change
@@ -204,7 +208,9 @@ echo "Signal file deleted. Exiting."
 
 ### Pod startup - **init-container**
 Upon pod start, the following happens:
-1. **Init container** checks the file `acl-definitions.yaml` from `/etc/valkey-cluster/acl`
+1. **Init-container** checks the file `acl-definitions.yaml` from `/etc/valkey-cluster/acl`
+2. **Init-container** will connect to **operator** and report ACL sha256 and waits
+3. (if pod was restartd by **operator**) **Operator** !!!!!!!!!!!!!!!!!!
 2. If the file is ok, **init container** will prepare the `/etc/valkey-operator-sidecar/tranzit/users.acl` file, will create `/etc/valkey-cluster/valkey-configs/valkey.conf` file from `/etc/valkey-cluster/base-config/valkey-base.conf` and will add in it
 ```ini
 user __valkey_admin_name__ on >__valkey_admin_pass__ +@all ~*
