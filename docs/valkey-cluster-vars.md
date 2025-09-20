@@ -53,13 +53,62 @@ The Operator SDK (Go-based) scaffolds a controller that can:
 - Use structured logging with correlation IDs or resource names.
 - Integrate with tracing if your operator spans multiple systems.
 
+## Architecture - Valkey Operator
+
+### Core Components
+
+| Component    | Role |
+|--------------|------|
+| Operator     | Control plane for orchestration, resharding, failover, upgrades      |
+| Sidecar      | Agent co-located with each Valkey node, handles lifecycle and health |
+| SPIRE Agent  | Injects SPIFFE identity into each workload                           |
+| SPIRE Server | Issues and rotates mTLS certs with SPIFFE IDs                        |
+
+### Identity & Security
+- **mTLS with SPIFFE:** all gRPC communication uses mutual TLS with SPIFFE IDs
+- **Operator validates SPIFFE SANs:** ensures sidecar identity matches expected namespace/tenant
+- **Namespace-scoped RBAC:** **operator** runs in single/multi-namespace or cluster-wide mode, with RBAC patterns enforced at startup
+- **Trust Domain Reinforcement:** SPIFFE trust domains mirror namespace boundaries for extra isolation
+- **Cerificates rotation:** the certificates are issued with a lifespan of 2-6h (TBD decide duration). They will be rotated when 66% of valability passed
+
+### Communication Model
+
+| Flow                  | Direction            | Notes |
+|-----------------------|----------------------|-------|
+| Heartbeat             | Sidecar -> Operator  | Unary RPC every minute with jittered backoff |
+| Orchestration Trigger | Operator -> Sidecar  | Operator replies with "stay connected" flag  |
+| Orchestration Session | Bidirectional stream | Temporary stream for multi-step workflows (eg resharding) |
+
+Rules
+- **Protocol:** gRPC
+- **Hybrid gRPC model:** stateless polling + sticky orchestration sessions
+- **Backoff strategy:** logarithmic with jitter to prevent thundering herd
+- **Stream lifecycle:** short-lived, closed after orchestration completes
+- **no mid stream TLS change:** there is no need for it. If mTLS certs are rotated during orchestration, the change will be postponed
+
+### Orchestration State
+- **CRD Status Field:** tracks orchestration progress, step versioning, and sidecar responses
+- **Durable across restarts:** **operator** can resume orchestration mid-flow
+- **Partial failure handling:** case-dependent logic with retry, rollback, or quorum enforcement
+- **Queued operations:** if another orchestration is required during an onging one or if multiple orchestrations are required, they will be queued and executed sequentially
+
+### Observability
+- **Traces:** per-orchestration flow, correlated across operator and sidecars
+- **Metrics:** heartbeat latency, orchestration duration, retry counts
+- **Events:** _(optional)_ human-readable audit trail, not used for logic
+
+### Unbound Mode
+- **Sidecars operate independently:** no operator communication
+- **Best-effort maintenance:** health checks, restarts, local failover
+- **User responsibility:** no orchestration, no centralized control
+
 ## Valkey ACL
 
 ### Some considerations related to ACL in Valkey
 
 ACL is the most crucial setting in good functionning of a cluster, maybe same level as networking and maybe above TLS.
 
-The most critical moment is when the pod is starting. If `aclfile /etc/valkey-acl/users.acl` is provided in valkey.conf and the file is corrupt, the startup of the cluster is in a bad shape.
+The most critical moment is when the pod is starting. If aclfile `/etc/valkey-acl/users.acl` is provided in valkey.conf and the file is corrupt, the startup of the cluster is in a bad shape.
 1. primaries will start, but no ACL. This means no user, no pass, no nothing. They are bare open
 2. replicas will start the cycle of restarts, as they are not able to connect to primaries (if primaries still have ACL)
 

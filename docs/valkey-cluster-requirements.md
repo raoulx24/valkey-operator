@@ -81,9 +81,10 @@ All other changes are rejected. Exceptions are pods, for `delete`.
 
 ## Operator - Sidecar communication
 
-**Operator** is mostly idle, the **sidecar’s** heartbeat is low-frequency and lightweight. The communication will be
-- **Sidecar** initiated - Heartbits or major events: HTTP/1.1. Major events can be Valkey failed, someone deleted the pod
-- **Operator** initiated - rest of communication: gRPC - only **orchestrator** open channels to needed **sidecars** when orchestration is triggered. Even use short-lived gRPC streams if needed.
+**Operator** is mostly idle, the **sidecar’s** heartbeat is low-frequency and lightweight. The communication will be allways **sidecar** initiated
+- **Sidecar** Heartbits or major events: unary gRPC - Major events can be Valkey failed, someone deleted the pod
+- **Operator** will answer with "all ok" flag - the communication ends
+- **Operator** will answer with "stay connected" flag - **sidecar** opens temporary bidirectional stream and waits for commands
 
 ## TLS
 
